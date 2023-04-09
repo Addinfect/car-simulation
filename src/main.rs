@@ -5,22 +5,14 @@ use macroquad::prelude as mq;
 
 use rand::prelude::*;
 
-const METER_TO_PXL: f32 = 5.0;
-const PI_F32: f32 = std::f32::consts::PI;
+const METER_TO_PXL: f32 = 5.0;      // One meter has the size of 5 pixel
 
-#[derive(Copy, Clone)]
-struct Car {
-    pos_x:f32,
-    pos_y:f32,
-    direction: f32,
-    view_angle: f32,
-    view_range: f32,
-    velocity: f32,
-    steering_angle: f32,
-    max_angle: f32,
-    b: f32,
-    a: f32
-}
+use crate::car::Car;
+use crate::dmp::DMP;
+use crate::dmp::PD_Controller;
+
+pub mod car;
+pub mod dmp;
 
 #[derive(Copy, Clone)]
 
@@ -48,37 +40,40 @@ async fn main() {
         m_pressed_y: 0.0
     };
 
-    let mut race_car = Car {
-        pos_x: (orange_cones[0].0+orange_cones[1].0) as f32 /2.0,
-        pos_y: (orange_cones[0].1+orange_cones[1].1) as f32 /2.0,
-        direction: std::f32::consts::PI/2.0,
-        view_angle: 40.0,
-        view_range: 20.0,
-        velocity: 0.0,
-        steering_angle: 0.0,         // -1.0 < angle < 1.0
-        max_angle: PI_F32/8.0,        // angle @ steering_angle 1.0 / -1.0
-        b: 2.0,                         // distance between left anf right wheel
-        a: 2.0                          // distance between front and rear axis
-    };
+    let mut race_car = Car::new((orange_cones[0].0+orange_cones[1].0) as f32 /2.0, 
+                                        (orange_cones[0].1+orange_cones[1].1) as f32 /2.0,
+                                3.0*std::f32::consts::PI/2.0);
 
-
+    let mut steering_controller = PD_Controller::new(1.0,1.0);
+    let mut steering_goal: f32 = 0.0;
 
     loop {
         
         mq::clear_background(mq::DARKGRAY);
-
-        for cone in blue_cones.iter() {
+        let (detected_blue, detected_yellow) = race_car.scan_cones(blue_cones.clone(), yellow_cones.clone());
+        for cone in detected_blue.iter() {
             draw_cone(*cone,0.35,mq::BLUE, display);
         }
-        for cone in yellow_cones.iter() {
+        for cone in detected_yellow.iter() {
             draw_cone(*cone,0.35,mq::YELLOW, display);
         }
         for cone in orange_cones.iter() {
             draw_cone(*cone,0.35,mq::ORANGE, display);
         }
-        race_car = update_car_position(race_car);
+        let (_,_,car_direction) = race_car.get_position();
+        race_car.steering_angle = steering_controller.compute(car_direction, steering_goal);
+        if race_car.steering_angle > 1.0 {
+            race_car.steering_angle = 1.0;
+        } else if race_car.steering_angle < -1.0 {
+            race_car.steering_angle = -1.0;
+        }
+        println!("steering angle:{}, car_direction:{}", race_car.steering_angle, car_direction);
+        race_car.update_car_position();
         draw_car(race_car, display);
-
+        let edge_points = race_car.get_view_edge();
+        for cone in edge_points.iter() {
+            draw_cone(*cone,0.35,mq::GREEN, display);
+        }
         // Mouse Actions
         let (mouse_x, mouse_y) = mq::mouse_position();
         let (_, mouse_wheel) = mq::mouse_wheel();
@@ -102,9 +97,9 @@ async fn main() {
 
         // Manual Actions
         if mq::is_key_down(mq::KeyCode::Right) {
-            race_car.steering_angle += -0.01;
+            steering_goal += -0.01;
         } else if mq::is_key_down(mq::KeyCode::Left) {
-            race_car.steering_angle += 0.01;
+            steering_goal += 0.01;
         } 
         if race_car.steering_angle > 1.0 {
             race_car.steering_angle = 1.0;
@@ -126,45 +121,27 @@ async fn main() {
 
 }
 
-fn update_car_position (mut race_car: Car) -> Car {
-    if race_car.steering_angle.abs() > 0.01 {
-        let r = (race_car.steering_angle*race_car.max_angle+PI_F32/2.0).tan()*race_car.a;    // radius of curve or between car and icc
-        let alpha = race_car.velocity/(r+race_car.b/2.0);                                    // angle of traveled distance per tick
-
-        let len = ((alpha/2.0).tan()*(r+race_car.b/2.0))*2.0;     // eukled dist between actual and next position
-        let beta = race_car.direction + alpha;                    // angle to next position
-
-        // update position
-        race_car.pos_x += beta.cos()*len;
-        race_car.pos_y += beta.sin()*len;
-        race_car.direction += alpha;
-
-    } else {    // straight movement
-        race_car.pos_x += race_car.direction.cos()*race_car.velocity;
-        race_car.pos_y += race_car.direction.sin()*race_car.velocity;
-    }
-    return race_car;
-}
 
 fn draw_cone(cone: (f64,f64), r: f32, color: mq::Color, sc: screen) {
     mq::draw_circle((mq::screen_width()/2.0 + (cone.0 as f32)*METER_TO_PXL)*sc.zoom+sc.x, (mq::screen_height()/2.0 + (cone.1 as f32)*METER_TO_PXL)*sc.zoom+sc.y, r*sc.zoom * METER_TO_PXL , color);
 }
 
 fn draw_car(car: Car, sc: screen) {
-    let x = (mq::screen_width()/2.0 + (car.pos_x as f32) * METER_TO_PXL ) * sc.zoom + sc.x;
-    let y = (mq::screen_height()/2.0 + (car.pos_y as f32) * METER_TO_PXL ) * sc.zoom + sc.y;
+    let (car_x,car_y,car_direction) = car.get_position();
+    let x = (mq::screen_width()/2.0 + car_x * METER_TO_PXL ) * sc.zoom + sc.x;
+    let y = (mq::screen_height()/2.0 + car_y * METER_TO_PXL ) * sc.zoom + sc.y;
     
     let v1 = mq::Vec2 {
-        x: x+(car.direction.cos()*2.0)*( METER_TO_PXL * sc.zoom),
-        y: y+(car.direction.sin()*2.0)*( METER_TO_PXL * sc.zoom)
+        x: x+(car_direction.cos()*2.0)*( METER_TO_PXL * sc.zoom),
+        y: y+(car_direction.sin()*2.0)*( METER_TO_PXL * sc.zoom)
     };  // (mq::screen_width()/2.0 + (car.pos_x as f32)*3.0)*sc.zoom+sc.x,
     let v2 = mq::Vec2 {
-        x: x+(-(car.direction+std::f32::consts::PI/2.0).cos()*0.75)*( METER_TO_PXL * sc.zoom),
-        y: y+(-(car.direction+std::f32::consts::PI/2.0).sin()*0.75) * (METER_TO_PXL * sc.zoom)
+        x: x+(-(car_direction+std::f32::consts::PI/2.0).cos()*0.75)*( METER_TO_PXL * sc.zoom),
+        y: y+(-(car_direction+std::f32::consts::PI/2.0).sin()*0.75) * (METER_TO_PXL * sc.zoom)
     }; 
     let v3 = mq::Vec2 {
-        x: x+((car.direction+std::f32::consts::PI/2.0).cos()*0.75)*( METER_TO_PXL * sc.zoom),
-        y: y+((car.direction+std::f32::consts::PI/2.0).sin()*0.75) * (METER_TO_PXL * sc.zoom)
+        x: x+((car_direction+std::f32::consts::PI/2.0).cos()*0.75)*( METER_TO_PXL * sc.zoom),
+        y: y+((car_direction+std::f32::consts::PI/2.0).sin()*0.75) * (METER_TO_PXL * sc.zoom)
     }; 
     mq::draw_triangle(v1, v2,v3, mq::RED);
 }
@@ -173,7 +150,7 @@ fn draw_car(car: Car, sc: screen) {
 fn generate_cone_lists() -> (Vec<(f64,f64)>,Vec<(f64,f64)>,Vec<(f64,f64)>) {
     
     let center = (0.,0.);
-    let r1 = 80.0;
+    let r1 = 40.0;
     let r2 = 40.0;
     let n: u32 = 8;
     let (p, pitch) = get_circle_samples(center, r1, r2, n);
