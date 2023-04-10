@@ -11,7 +11,8 @@ pub struct Car {
     pub steering_angle: f32,
     max_angle: f32,
     b: f32,
-    a: f32
+    a: f32,
+    traveled_distance: f32,
 }
 
 impl Car {
@@ -26,13 +27,16 @@ impl Car {
             steering_angle: 0.0,         // -1.0 < angle < 1.0
             max_angle: std::f32::consts::PI/8.0,        // angle @ steering_angle 1.0 / -1.0
             b: 2.0,                         // distance between left anf right wheel
-            a: 2.0                          // distance between front and rear axis
+            a: 2.0,                          // distance between front and rear axis
+            traveled_distance: 0.0,
         }
     }
 }
 
 impl Car {
     pub fn update_car_position (&mut self) {
+        let old_x: f32 = self.pos_x;
+        let old_y: f32 = self.pos_y;
         if self.steering_angle.abs() > 0.01 {
             let r = (self.steering_angle*self.max_angle+std::f32::consts::PI/2.0).tan()*self.a;    // radius of curve or between car and icc
             let alpha = self.velocity/(r+self.b/2.0);                                    // angle of traveled distance per tick
@@ -44,16 +48,17 @@ impl Car {
             self.pos_x += beta.cos()*len;
             self.pos_y += beta.sin()*len;
             self.direction += alpha;
-            if self.direction < 0.0 {
+            /*if self.direction < 0.0 {
                 self.direction += std::f32::consts::PI*2.0;
             } else if self.direction > std::f32::consts::PI*2.0 {
                 self.direction -= std::f32::consts::PI*2.0;
-            }
+            }*/
 
         } else {    // straight movement
             self.pos_x += self.direction.cos()*self.velocity;
             self.pos_y += self.direction.sin()*self.velocity;
         }
+        self.traveled_distance += f32::sqrt((old_x-self.pos_x).powf(2.0)+(old_y-self.pos_y).powf(2.0));
     }
 
     pub fn get_position(self) -> (f32,f32,f32) {
@@ -89,9 +94,9 @@ impl Car {
 
     fn is_cone_in_angle(self, y_diff: f32, x_diff:f32) -> bool {
         let radiant = y_diff.atan2(x_diff) + std::f32::consts::PI*2.0;
-        
-        let min_rad = self.direction - ((self.view_angle*std::f32::consts::PI)/180.0)/2.0 + std::f32::consts::PI;
-        let max_rad = self.direction + ((self.view_angle*std::f32::consts::PI)/180.0)/2.0 + std::f32::consts::PI;
+        let car_direction = self.direction % (std::f32::consts::PI*2.0);
+        let min_rad = car_direction - ((self.view_angle*std::f32::consts::PI)/180.0)/2.0 + std::f32::consts::PI;
+        let max_rad = car_direction + ((self.view_angle*std::f32::consts::PI)/180.0)/2.0 + std::f32::consts::PI;
         if (min_rad < radiant && radiant < max_rad) ||
          (min_rad < (radiant - std::f32::consts::PI*2.0) &&  (radiant - std::f32::consts::PI*2.0) < max_rad) || 
          (min_rad < (radiant + std::f32::consts::PI*2.0) &&  (radiant + std::f32::consts::PI*2.0) < max_rad)  {
@@ -122,7 +127,11 @@ impl Car {
 
         }
         return points;
+    
     }
+     pub fn get_traveled_distance(self) -> f32 {
+        return self.traveled_distance;
+     }
 }
 
 
