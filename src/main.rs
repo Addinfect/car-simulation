@@ -1,5 +1,6 @@
 use std::iter::zip;
 use std::vec;
+use rand_distr::Normal;
 use rand::distributions::Uniform;
 use std::time::{Duration, SystemTime};
 
@@ -11,14 +12,14 @@ const METER_TO_PXL: f32 = 5.0;      // One meter has the size of 5 pixel
 
 use crate::car::Car;
 use crate::dmp::DMP;
-use crate::dmp::PD_Controller;
+use crate::dmp::PdController;
 
 pub mod car;
 pub mod dmp;
 
 #[derive(Copy, Clone)]
 
-struct screen {
+struct Screen {
     x: f32,
     y: f32,
     zoom: f32,
@@ -32,7 +33,7 @@ async fn main() {
 
 
 
-    let mut display = screen {
+    let mut display = Screen {
         x: mq::screen_width()/2.0,
         y: mq::screen_height()/2.0,
         zoom: 1.0,
@@ -41,131 +42,183 @@ async fn main() {
         m_pressed_y: 0.0
     };
 
+    let mut init_flag = false; 
+
+    let n_base_functions = 40;
+    let mut rng = rand::thread_rng();
+    let range: Uniform<f32> = Uniform::new(-1.0, 1.0);
+    let mut weights: Vec<f32> = (0..n_base_functions).map(|_| rng.sample(&range)).collect();
+    weights = (0..n_base_functions).map(|_| 0.0).collect();
+
+    let n_samples = 15;
+    let mut sample_rewards: Vec<f32> = vec![];
+    let mut sample_weights: Vec<Vec<f32>> = vec![];
+    
+
+
+
     loop {
 
-        let mut plot_data: Plot_data = Plot_data::new(300);
+        for i_samples in 0..n_samples {
 
-        let (blue_cones,yellow_cones,orange_cones) = generate_cone_lists();
-
-        display.x = (orange_cones[0].0 + orange_cones[1].0) as f32/2.0 - mq::screen_height()/2.0;
-        display.y = (orange_cones[0].1 + orange_cones[1].1) as f32/2.0;
-
-        let mut race_car = Car::new((orange_cones[0].0+orange_cones[1].0) as f32 /2.0, 
-                                            (orange_cones[0].1+orange_cones[1].1) as f32 /2.0,
-                                    3.0*std::f32::consts::PI/2.0);
-
-        let mut steering_controller = PD_Controller::new(1.0,1.0);
-        let mut steering_goal: f32 = 0.0;
-        let n_base_functions = 40;
-        let mut dmp = DMP::new(n_base_functions, yellow_cones.clone(), blue_cones.clone());
-
-        let mut rng = rand::thread_rng();
-        let range: Uniform<f32> = Uniform::new(-1.0, 1.0);
-        let mut weights: Vec<f32> = (0..n_base_functions).map(|_| rng.sample(&range)).collect();
-        
-        dmp.set_weights(weights);
-        let (_,_,car_direction) = race_car.get_position();
-        let planned_trajectory = dmp.generate_trajectory(-2.0, car_direction);
-        /*
-        for traj in planned_trajectory.iter() {
-            plot_data.new_data(*traj);
-        }*/
-        let start = SystemTime::now();
-        let ten_seconds = Duration::new(10, 0);
-        race_car.velocity = 0.2;
-
-        while (start + ten_seconds) > SystemTime::now() {
             
-            mq::clear_background(mq::DARKGRAY);
-            let (detected_blue, detected_yellow) = race_car.scan_cones(blue_cones.clone(), yellow_cones.clone());
-            for cone in detected_blue.iter() {
-                draw_cone(*cone,0.35,mq::BLUE, display);
-            }
-            for cone in detected_yellow.iter() {
-                draw_cone(*cone,0.35,mq::YELLOW, display);
-            }
-            for cone in orange_cones.iter() {
-                draw_cone(*cone,0.35,mq::ORANGE, display);
-            }
 
+            let mut plot_data: PlotData = PlotData::new(300);
+
+            let (blue_cones,yellow_cones,orange_cones) = generate_cone_lists();
+
+            display.x = (orange_cones[0].0 + orange_cones[1].0) as f32/2.0 - mq::screen_height()/2.0;
+            display.y = (orange_cones[0].1 + orange_cones[1].1) as f32/2.0;
+
+            let mut race_car = Car::new((orange_cones[0].0+orange_cones[1].0) as f32 /2.0, 
+                                                (orange_cones[0].1+orange_cones[1].1) as f32 /2.0,
+                                        3.0*std::f32::consts::PI/2.0);
+
+            let mut steering_controller = PdController::new(1.0,1.0);
+            let mut steering_goal: f32 = 0.0;
+            let mut dmp = DMP::new(n_base_functions, yellow_cones.clone(), blue_cones.clone());
+            
+            let weight_samples: Vec<f32> = weights.iter().map(|mean| Normal::new(*mean, 3.0).unwrap().sample( &mut rand::thread_rng())).collect();
+            sample_weights.push(weight_samples.clone());
+            dmp.set_weights(weight_samples.clone());
             let (_,_,car_direction) = race_car.get_position();
-            let index: usize = (race_car.get_traveled_distance()*10.0) as usize;
-            if index < planned_trajectory.len() {
-                steering_goal = planned_trajectory[index] * std::f32::consts::PI*2.0;
-            }
+            let planned_trajectory = dmp.clone().generate_trajectory(race_car.get_goal_direction(), car_direction);
+            /*
+            for traj in planned_trajectory.iter() {
+                plot_data.new_data(*traj);
+            }*/
+            let start = SystemTime::now();
+            let seconds = Duration::new(3, 0);
+            race_car.velocity = 0.2;
 
-            race_car.steering_angle = steering_controller.compute(car_direction, steering_goal);
-            if race_car.steering_angle > 1.0 {
-                race_car.steering_angle = 1.0;
-            } else if race_car.steering_angle < -1.0 {
-                race_car.steering_angle = -1.0;
-            }
-            //println!("steering angle:{}, steering goal: {}, car_direction:{}", race_car.steering_angle,steering_goal, car_direction);
-            race_car.update_car_position();
-            draw_car(race_car, display);
-            let edge_points = race_car.get_view_edge();
-            for cone in edge_points.iter() {
-                draw_cone(*cone,0.35,mq::GREEN, display);
-            }
-            plot_data.new_data(steering_goal- car_direction); //% std::f32::consts::PI*2.0
-            plot_data.draw_data();
+            let mut sum_reward = 0.0;
 
-            let (x,y,_) = race_car.get_position();
-
-            // Mouse Actions
-            let (mouse_x, mouse_y) = mq::mouse_position();
-            let (_, mouse_wheel) = mq::mouse_wheel();
-            if mouse_wheel > 0.0 {
-                display.zoom =  display.zoom+0.1;
-            } else if mouse_wheel < 0.0 {
-                display.zoom =  display.zoom-0.1;
-            }
-            if mq::is_mouse_button_down(mq::MouseButton::Left) {
-                if display.mouse_pressed {
-                    display.x += mouse_x-display.m_pressed_x;
-                    display.y += mouse_y-display.m_pressed_y;
+            while (start + seconds) > SystemTime::now() {
+                
+                mq::clear_background(mq::DARKGRAY);
+                let (detected_blue, detected_yellow) = race_car.scan_cones(blue_cones.clone(), yellow_cones.clone());
+                for cone in detected_blue.iter() {
+                    draw_cone(*cone,0.35,mq::BLUE, display);
                 }
-                display.m_pressed_x = mouse_x;
-                display.m_pressed_y = mouse_y;
-                display.mouse_pressed = true;
-            }
-            else {
-                display.mouse_pressed = false;
-            }
+                for cone in detected_yellow.iter() {
+                    draw_cone(*cone,0.35,mq::YELLOW, display);
+                }
+                for cone in orange_cones.iter() {
+                    draw_cone(*cone,0.35,mq::ORANGE, display);
+                }
 
-            // Manual Actions
-            if mq::is_key_down(mq::KeyCode::Right) {
-                steering_goal += 0.03;
-            } else if mq::is_key_down(mq::KeyCode::Left) {
-                steering_goal += -0.03;
-            } 
-            if race_car.steering_angle > 1.0 {
-                race_car.steering_angle = 1.0;
-            } else if race_car.steering_angle < -1.0 {
-                race_car.steering_angle = -1.0;
+                let (_,_,car_direction) = race_car.get_position();
+                let index: usize = (race_car.get_traveled_distance()*10.0) as usize;
+                if index < planned_trajectory.len() {
+                    steering_goal = planned_trajectory[index] * std::f32::consts::PI*2.0;
+                }
+
+                race_car.steering_angle = steering_controller.compute(car_direction, steering_goal);
+                if race_car.steering_angle > 1.0 {
+                    race_car.steering_angle = 1.0;
+                } else if race_car.steering_angle < -1.0 {
+                    race_car.steering_angle = -1.0;
+                }
+                //println!("steering angle:{}, steering goal: {}, car_direction:{}", race_car.steering_angle,steering_goal, car_direction);
+                race_car.update_car_position();
+                draw_car(race_car, display);
+                let edge_points = race_car.get_view_edge();
+                for cone in edge_points.iter() {
+                    draw_cone(*cone,0.35,mq::GREEN, display);
+                }
+                //plot_data.new_data(steering_goal- car_direction); //% std::f32::consts::PI*2.0
+                let (x,y,_) = race_car.get_position();
+                sum_reward += dmp.clone().get_reward((x,y));
+                plot_data.new_data(dmp.clone().get_reward((x,y)));
+                plot_data.draw_data();
+
+                // Mouse Actions
+                let (mouse_x, mouse_y) = mq::mouse_position();
+                let (_, mouse_wheel) = mq::mouse_wheel();
+                if mouse_wheel > 0.0 {
+                    display.zoom =  display.zoom+0.1;
+                } else if mouse_wheel < 0.0 {
+                    display.zoom =  display.zoom-0.1;
+                }
+                if mq::is_mouse_button_down(mq::MouseButton::Left) {
+                    if display.mouse_pressed {
+                        display.x += mouse_x-display.m_pressed_x;
+                        display.y += mouse_y-display.m_pressed_y;
+                    }
+                    display.m_pressed_x = mouse_x;
+                    display.m_pressed_y = mouse_y;
+                    display.mouse_pressed = true;
+                }
+                else {
+                    display.mouse_pressed = false;
+                }
+
+                // Manual Actions
+                if mq::is_key_down(mq::KeyCode::Right) {
+                    steering_goal += 0.03;
+                } else if mq::is_key_down(mq::KeyCode::Left) {
+                    steering_goal += -0.03;
+                } 
+                if race_car.steering_angle > 1.0 {
+                    race_car.steering_angle = 1.0;
+                } else if race_car.steering_angle < -1.0 {
+                    race_car.steering_angle = -1.0;
+                }
+                if mq::is_key_pressed(mq::KeyCode::Down) {
+                    race_car.velocity -= 0.1;
+                }
+                if mq::is_key_pressed(mq::KeyCode::Up) {
+                    race_car.velocity += 0.1;
+                }
+
+
+
+
+                mq::next_frame().await
             }
-            if mq::is_key_pressed(mq::KeyCode::Down) {
-                race_car.velocity -= 0.1;
-            }
-            if mq::is_key_pressed(mq::KeyCode::Up) {
-                race_car.velocity += 0.1;
-            }
-
-
-
-
-            mq::next_frame().await
+            sample_rewards.push(sum_reward);
+            println!("reward: {}", sum_reward);
         }
+        // after sample iterations update weights
+        let mut top_sets: Vec<(f32,Vec<f32>)> = vec![];
+        let mut reward_weights: Vec<(f32, Vec<f32>)> = vec![];
+        for (r,w) in zip(sample_rewards.clone(), sample_weights.clone()) {
+            reward_weights.push((r,w));
+        }
+
+        for i_max in 0..5 {
+            let index_of_max: Option<usize> = reward_weights.iter()
+            .enumerate()
+            .max_by(|(_, (a,_)), (_, (b,_))| a.total_cmp(b))
+            .map(|(index, _)| index);
+            top_sets.push(reward_weights.remove(index_of_max.unwrap()));
+        }
+        let mut sum_weights: Vec<f32> = vec![0.0;n_base_functions as usize];
+        for n in 0..top_sets[0].1.len() {
+            for (_,w) in top_sets.clone() {
+                sum_weights[n] += w[n];
+            }
+        }
+        weights = sum_weights.iter().map(|a| a/5.0).collect();
+        println!("weights updated");
+        
+
+
+        
+
+        
+
+
     }
 
 }
 
 
-fn draw_cone(cone: (f64,f64), r: f32, color: mq::Color, sc: screen) {
+fn draw_cone(cone: (f64,f64), r: f32, color: mq::Color, sc: Screen) {
     mq::draw_circle((mq::screen_width()/2.0 + (cone.0 as f32)*METER_TO_PXL)*sc.zoom+sc.x, (mq::screen_height()/2.0 + (cone.1 as f32)*METER_TO_PXL)*sc.zoom+sc.y, r*sc.zoom * METER_TO_PXL , color);
 }
 
-fn draw_car(car: Car, sc: screen) {
+fn draw_car(car: Car, sc: Screen) {
     let (car_x,car_y,car_direction) = car.get_position();
     let x = (mq::screen_width()/2.0 + car_x * METER_TO_PXL ) * sc.zoom + sc.x;
     let y = (mq::screen_height()/2.0 + car_y * METER_TO_PXL ) * sc.zoom + sc.y;
@@ -197,7 +250,6 @@ fn generate_cone_lists() -> (Vec<(f64,f64)>,Vec<(f64,f64)>,Vec<(f64,f64)>) {
 
     for ((x,y),pit) in zip(p.clone(), pitch.clone()) {
         pitch_points.push((x+pit.cos()*0.5,y+pit.sin()*0.5));
-        print!("{}",pit);
     }
 
     let mut bezier: Vec<(f64, f64)> = vec![];
@@ -274,14 +326,14 @@ fn bezier_curve(s_point: &(f64,f64), s_rad:f64, e_point: &(f64,f64), e_rad: f64,
 }
 
 
-struct Plot_data {
+struct PlotData {
     n_data_points: usize,
     data_points: Vec<f32>
 }
 
-impl Plot_data {
-    pub fn new(n: i32) -> Plot_data {
-        Plot_data {
+impl PlotData {
+    pub fn new(n: i32) -> PlotData {
+        PlotData {
             n_data_points: n as usize,
             data_points: vec![]
         }
@@ -307,13 +359,13 @@ impl Plot_data {
         let min_max = max-min;
         
         for (index,point) in self.data_points.iter().enumerate() {
-            let mut y = 0.0;
+            let mut y_pos = 0.0;
             if min_max != 0.0 {
-            y = ((max - point)/min_max)*plot_height + 4.0* mq::screen_height()/5.0;
+            y_pos = ((max - point)/min_max)*plot_height + 4.0* mq::screen_height()/5.0;
             } else {
-                y = (0.5)*plot_height + 4.0* mq::screen_height()/5.0;
+                y_pos = (0.5)*plot_height + 4.0* mq::screen_height()/5.0;
             }
-            mq::draw_circle((mq::screen_width()/10.0)/2.0 + index as f32 * width_between_points , y , 2.0, mq::RED);
+            mq::draw_circle((mq::screen_width()/10.0)/2.0 + index as f32 * width_between_points , y_pos , 2.0, mq::RED);
             mq::draw_text(&format!("{:.2}", max), 0.0, 4.0*mq::screen_height()/5.0, 20.0, mq::WHITE);
             mq::draw_text(&format!("{:.2}", min), 0.0, mq::screen_height(), 20.0, mq::WHITE);
             mq::draw_text(&format!("{:.2}", self.data_points.last().copied().unwrap()), 0.0, mq::screen_height()-mq::screen_height()/10.0, 20.0, mq::WHITE);

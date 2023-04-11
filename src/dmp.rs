@@ -10,6 +10,7 @@ pub struct DMP {
     reward_trajectory: Vec<(f64,f64,f32)>,
     variance: f32,
     weights: Vec<f32>,
+    last_reward: f32,
 }
 
 impl DMP {
@@ -21,18 +22,31 @@ impl DMP {
             let y = (b_cone.1 + y_cone.1)/2.0;
             let reward: f32 = i as f32 + BASE_REWARD;
             r_trajectory.push((x,y,reward));
+            i += 1;
         }
-        let mut weight_vec: Vec<f32> = vec![0.0;number_gaussians as usize];
+        let weight_vec: Vec<f32> = vec![0.0;number_gaussians as usize];
         DMP{
             n: number_gaussians,
             reward_trajectory: r_trajectory,
             variance: 1.0,
             weights: weight_vec,
+            last_reward: 0.0,
         }
     }
 
-    pub fn get_reward(pos: (f32,f32) ) -> f32 {
-        return 0.0
+    pub fn get_reward(mut self, pos: (f32,f32) ) -> f32 {
+        let mut reward: f32 = 0.0;
+        for traj in self.reward_trajectory.iter() {
+            let distance = ((pos.0 - traj.0 as f32).powf(2.0) + (pos.1 - traj.1 as f32).powf(2.0)).sqrt();
+            if distance < 4.0 {
+                reward += (traj.2 / (distance* distance))*0.01;
+            }
+        }
+        if self.last_reward != 0.0 {
+            reward += self.last_reward;
+        }
+        self.last_reward = reward;
+        return reward;
     }
 
     fn base_function(self,x: f32, c:f32) -> f32 {
@@ -72,19 +86,19 @@ impl DMP {
     
 }
 
-pub struct PD_Controller {
-    Kp: f32,
-    Kd: f32,
+pub struct PdController {
+    kp: f32,
+    kd: f32,
     last_error: f32
 
 }
 
-impl PD_Controller {
+impl PdController {
 
-    pub fn new(p:f32, d:f32) -> PD_Controller {
-        PD_Controller {
-            Kp: p,
-            Kd: d,
+    pub fn new(p:f32, d:f32) -> PdController {
+        PdController {
+            kp: p,
+            kd: d,
             last_error: 0.0
         }
     }
@@ -94,6 +108,6 @@ impl PD_Controller {
         let error_diff = error - self.last_error;
         self.last_error = error;
 
-        return self.Kp * error + self.Kd * error_diff;
+        return self.kp * error + self.kd * error_diff;
     }
 }

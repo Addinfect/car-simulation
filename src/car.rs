@@ -13,6 +13,7 @@ pub struct Car {
     b: f32,
     a: f32,
     traveled_distance: f32,
+    goal_direction: f32,
 }
 
 impl Car {
@@ -29,6 +30,7 @@ impl Car {
             b: 2.0,                         // distance between left anf right wheel
             a: 2.0,                          // distance between front and rear axis
             traveled_distance: 0.0,
+            goal_direction: 0.0,
         }
     }
 }
@@ -65,13 +67,13 @@ impl Car {
         return (self.pos_x, self.pos_y, self.direction);
     }
 
-    pub fn scan_cones(self, blue_cones: Vec<(f64,f64)>, yellow_cones: Vec<(f64,f64)>) -> (Vec<(f64,f64)>,Vec<(f64,f64)>) {
+    pub fn scan_cones(mut self, blue_cones: Vec<(f64,f64)>, yellow_cones: Vec<(f64,f64)>) -> (Vec<(f64,f64)>,Vec<(f64,f64)>) {
         let mut detected_blue: Vec<(f64,f64)> = vec![];
         let mut detected_yellow: Vec<(f64,f64)> = vec![];
         //println!("{}", self.direction);
-        for blue in blue_cones {
+        for blue in &blue_cones {
             if self.is_cone_in_range((blue.0 as f32, blue.1 as f32)) {
-                detected_blue.push(blue);
+                detected_blue.push(*blue);
             } 
         }
         for yellow in yellow_cones {
@@ -79,7 +81,16 @@ impl Car {
                 detected_yellow.push(yellow);
             } 
         }
+        let farest_cone = blue_cones.iter().max_by(|(a_x,a_y), (b_x,b_y)| self.euklid_dist_to_car(*a_x, *a_y).total_cmp(&self.euklid_dist_to_car(*b_x, *b_y))).unwrap();
+        self.goal_direction = self.euklid_dist_to_car(farest_cone.0, farest_cone.1) as f32;
+        
         return (detected_blue,detected_yellow)
+    }
+
+    fn euklid_dist_to_car(self, x: f64, y: f64) -> f64 {
+        let x_diff = self.pos_x - x as f32;
+        let y_diff = self.pos_y - y as f32;
+        return f32::sqrt(f32::powf(x_diff,2.0) + f32::powf(y_diff,2.0)) as f64;
     }
 
     fn is_cone_in_range(self, cone: (f32,f32)) -> bool {
@@ -131,6 +142,11 @@ impl Car {
     }
      pub fn get_traveled_distance(self) -> f32 {
         return self.traveled_distance;
+     }
+
+     pub fn get_goal_direction(self) -> f32 {
+        return self.goal_direction;
+
      }
 }
 
