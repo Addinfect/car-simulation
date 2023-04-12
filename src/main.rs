@@ -74,22 +74,23 @@ async fn main() {
                                                 (orange_cones[0].1+orange_cones[1].1) as f32 /2.0,
                                         3.0*std::f32::consts::PI/2.0);
 
-            let mut steering_controller = PdController::new(1.0,1.0);
+            let mut steering_controller = PdController::new(5.0,0.001);
             let mut steering_goal: f32 = 0.0;
             let mut dmp = DMP::new(n_base_functions, yellow_cones.clone(), blue_cones.clone());
             
-            let weight_samples: Vec<f32> = weights.iter().map(|mean| Normal::new(*mean, 3.0).unwrap().sample( &mut rand::thread_rng())).collect();
+            let weight_samples: Vec<f32> = weights.iter().map(|mean| Normal::new(*mean, 2.0).unwrap().sample( &mut rand::thread_rng())).collect();
             sample_weights.push(weight_samples.clone());
             dmp.set_weights(weight_samples.clone());
             let (_,_,car_direction) = race_car.get_position();
             let planned_trajectory = dmp.clone().generate_trajectory(race_car.get_goal_direction(), car_direction);
             /*
             for traj in planned_trajectory.iter() {
-                plot_data.new_data(*traj);
+                plot_data.new_data(*traj, 1);
             }*/
             let start = SystemTime::now();
-            let seconds = Duration::new(3, 0);
-            race_car.velocity = 0.2;
+            let seconds = Duration::new(10, 0);
+            let start_reward_count = Duration::new(0,500000);
+            race_car.velocity = 0.1;
 
             let mut sum_reward = 0.0;
 
@@ -110,15 +111,22 @@ async fn main() {
                 let (_,_,car_direction) = race_car.get_position();
                 let index: usize = (race_car.get_traveled_distance()*10.0) as usize;
                 if index < planned_trajectory.len() {
-                    steering_goal = planned_trajectory[index] * std::f32::consts::PI*2.0;
+                    //steering_goal = planned_trajectory[index] * std::f32::consts::PI*2.0;
                 }
+                
 
+                steering_goal = race_car.get_goal_direction()-car_direction;
                 race_car.steering_angle = steering_controller.compute(car_direction, steering_goal);
+                plot_data.new_data(steering_goal, 1);
+                plot_data.new_data((steering_goal-race_car.steering_angle).abs(),0);
+                println!("{}",(race_car.get_goal_direction() ));
                 if race_car.steering_angle > 1.0 {
                     race_car.steering_angle = 1.0;
                 } else if race_car.steering_angle < -1.0 {
                     race_car.steering_angle = -1.0;
                 }
+                plot_data.new_data(race_car.steering_angle, 2);
+
                 //println!("steering angle:{}, steering goal: {}, car_direction:{}", race_car.steering_angle,steering_goal, car_direction);
                 race_car.update_car_position();
                 draw_car(race_car, display);
@@ -128,8 +136,11 @@ async fn main() {
                 }
                 //plot_data.new_data(steering_goal- car_direction); //% std::f32::consts::PI*2.0
                 let (x,y,_) = race_car.get_position();
-                sum_reward += dmp.clone().get_reward((x,y));
-                plot_data.new_data(dmp.clone().get_reward((x,y)));
+                if (start + start_reward_count) < SystemTime::now() {
+                    sum_reward += dmp.clone().get_reward((x,y));
+                }
+                //plot_data.new_data(dmp.clone().get_reward((x,y)));
+                //plot_data.new_data(sum_reward, 0);
                 plot_data.draw_data();
 
                 // Mouse Actions
@@ -155,9 +166,9 @@ async fn main() {
 
                 // Manual Actions
                 if mq::is_key_down(mq::KeyCode::Right) {
-                    steering_goal += 0.03;
+                    steering_goal += 0.3;
                 } else if mq::is_key_down(mq::KeyCode::Left) {
-                    steering_goal += -0.03;
+                    steering_goal += -0.3;
                 } 
                 if race_car.steering_angle > 1.0 {
                     race_car.steering_angle = 1.0;
@@ -200,7 +211,8 @@ async fn main() {
             }
         }
         weights = sum_weights.iter().map(|a| a/5.0).collect();
-        println!("weights updated");
+        println!("weights updated: {:?}",weights);
+
         
 
 
@@ -328,22 +340,24 @@ fn bezier_curve(s_point: &(f64,f64), s_rad:f64, e_point: &(f64,f64), e_rad: f64,
 
 struct PlotData {
     n_data_points: usize,
-    data_points: Vec<f32>
+    n_plots: usize,
+    data_points: Vec<Vec<f32>>,
 }
 
 impl PlotData {
     pub fn new(n: i32) -> PlotData {
         PlotData {
             n_data_points: n as usize,
-            data_points: vec![]
+            n_plots: 3,
+            data_points: vec![vec![]; n as usize],
         }
     }
 
-    pub fn new_data(&mut self, data_point: f32) {
-        self.data_points.push(data_point);
+    pub fn new_data(&mut self, data_point: f32, n: i32) {
+        self.data_points[n as usize].push(data_point);
     
-        if self.data_points.len() > self.n_data_points {
-            self.data_points.remove(0);
+        if self.data_points[n as usize].len() > self.n_data_points {
+            self.data_points[n as usize].remove(0);
         }
     }
     pub fn draw_data(&mut self) {
@@ -351,24 +365,35 @@ impl PlotData {
         if self.data_points.len() == 0 {
             return
         }
-        let plot_width = 9.0 * (mq::screen_width()/10.0);
+        let plot_width = 6.0 * (mq::screen_width()/10.0);
         let plot_height =  mq::screen_height()/5.0;
         let width_between_points = plot_width/(self.n_data_points as f32);
-        let max = self.data_points.iter().fold(-f32::INFINITY, |a, &b| a.max(b));
-        let min = self.data_points.iter().fold(f32::INFINITY, |a, &b| a.min(b));
-        let min_max = max-min;
-        
-        for (index,point) in self.data_points.iter().enumerate() {
-            let mut y_pos = 0.0;
-            if min_max != 0.0 {
-            y_pos = ((max - point)/min_max)*plot_height + 4.0* mq::screen_height()/5.0;
-            } else {
-                y_pos = (0.5)*plot_height + 4.0* mq::screen_height()/5.0;
+
+        let colors = vec![mq::RED, mq::GREEN, mq::BLUE];
+        for i in 0..self.n_plots {
+            let mut max = self.data_points[i].iter().fold(-f32::INFINITY, |a, &b| a.max(b));
+            let mut min = self.data_points[i].iter().fold(f32::INFINITY, |a, &b| a.min(b));
+            let mut min_max = max-min;
+            for (index,point) in self.data_points[i].iter().enumerate() {
+                let mut y_pos = 0.0;
+                if i > 0 {
+                    min = -std::f32::consts::PI;
+                    max = std::f32::consts::PI;
+                    min_max = max-min;
+                }
+                if min_max != 0.0 {
+                y_pos = ((max - point)/min_max)*plot_height + 4.0* mq::screen_height()/5.0;
+                } else {
+                    y_pos = (0.5)*plot_height + 4.0* mq::screen_height()/5.0;
+                }
+                mq::draw_circle((mq::screen_width()/10.0)/2.0 + index as f32 * width_between_points , y_pos , 2.0, colors[i]);
+                //mq::draw_text(&format!("{:.2}", max), 0.0, 4.0*mq::screen_height()/5.0, 20.0, mq::WHITE);
+                //mq::draw_text(&format!("{:.2}", min), 0.0, mq::screen_height(), 20.0, mq::WHITE);
+                //mq::draw_text(&format!("{:.2}", self.data_points[i].last().copied().unwrap()), 0.0, mq::screen_height()-mq::screen_height()/10.0, 20.0, mq::WHITE);
             }
-            mq::draw_circle((mq::screen_width()/10.0)/2.0 + index as f32 * width_between_points , y_pos , 2.0, mq::RED);
-            mq::draw_text(&format!("{:.2}", max), 0.0, 4.0*mq::screen_height()/5.0, 20.0, mq::WHITE);
-            mq::draw_text(&format!("{:.2}", min), 0.0, mq::screen_height(), 20.0, mq::WHITE);
-            mq::draw_text(&format!("{:.2}", self.data_points.last().copied().unwrap()), 0.0, mq::screen_height()-mq::screen_height()/10.0, 20.0, mq::WHITE);
+            mq::draw_line((mq::screen_width()/10.0)/2.0, ((max - 0.0)/min_max)*plot_height + 4.0* mq::screen_height()/5.0,
+                         mq::screen_width(), ((max - 0.0)/min_max)*plot_height + 4.0* mq::screen_height()/5.0, 2.0,colors[i]);
+
         }
         
     }

@@ -67,7 +67,7 @@ impl Car {
         return (self.pos_x, self.pos_y, self.direction);
     }
 
-    pub fn scan_cones(mut self, blue_cones: Vec<(f64,f64)>, yellow_cones: Vec<(f64,f64)>) -> (Vec<(f64,f64)>,Vec<(f64,f64)>) {
+    pub fn scan_cones(&mut self, blue_cones: Vec<(f64,f64)>, yellow_cones: Vec<(f64,f64)>) -> (Vec<(f64,f64)>,Vec<(f64,f64)>) {
         let mut detected_blue: Vec<(f64,f64)> = vec![];
         let mut detected_yellow: Vec<(f64,f64)> = vec![];
         //println!("{}", self.direction);
@@ -81,9 +81,10 @@ impl Car {
                 detected_yellow.push(yellow);
             } 
         }
-        let farest_cone = blue_cones.iter().max_by(|(a_x,a_y), (b_x,b_y)| self.euklid_dist_to_car(*a_x, *a_y).total_cmp(&self.euklid_dist_to_car(*b_x, *b_y))).unwrap();
-        self.goal_direction = self.euklid_dist_to_car(farest_cone.0, farest_cone.1) as f32;
-        
+        let farest_cone = detected_blue.iter().max_by(|(a_x,a_y), (b_x,b_y)| self.euklid_dist_to_car(*a_x, *a_y).total_cmp(&self.euklid_dist_to_car(*b_x, *b_y)));
+        if farest_cone != None {
+            self.goal_direction = f32::atan2(farest_cone.unwrap().1 as f32 -self.pos_y, farest_cone.unwrap().0 as f32 -self.pos_x);
+        }
         return (detected_blue,detected_yellow)
     }
 

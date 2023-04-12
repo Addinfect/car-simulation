@@ -39,11 +39,11 @@ impl DMP {
         for traj in self.reward_trajectory.iter() {
             let distance = ((pos.0 - traj.0 as f32).powf(2.0) + (pos.1 - traj.1 as f32).powf(2.0)).sqrt();
             if distance < 4.0 {
-                reward += (traj.2 / (distance* distance))*0.01;
+                reward += (traj.2 / (distance* distance+ 2.0))*0.01;
             }
         }
-        if self.last_reward != 0.0 {
-            reward += self.last_reward;
+        if self.last_reward.abs() < 0.01 {
+            reward = reward + self.last_reward;
         }
         self.last_reward = reward;
         return reward;
